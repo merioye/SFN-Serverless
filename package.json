@@ -1,0 +1,25 @@
+{
+  "name": "sfn-serverless",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "deploy": "serverless deploy",
+    "remove": "serverless remove"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "@types/aws-lambda": "^8.10.119",
+    "serverless-iam-roles-per-function": "^3.2.0",
+    "serverless-plugin-typescript": "^2.1.5",
+    "serverless-step-functions": "^3.14.0",
+    "typescript": "^5.1.6"
+  },
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.379.1",
+    "@aws-sdk/client-sfn": "^3.379.1",
+    "@aws-sdk/util-dynamodb": "^3.379.1"
+  }
+}

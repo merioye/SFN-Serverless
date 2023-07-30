@@ -1,0 +1,200 @@
+service: sfn-serverless
+frameworkVersion: "3"
+
+provider:
+  name: aws
+  runtime: nodejs18.x
+  region: us-east-1
+  versionFunctions: false
+  stage: ${opt:stage,'dev'}
+
+functions:
+  checkInventory:
+    handler: src/handler.checkInventory
+    memorySize: 128
+    timeout: 5
+    environment:
+      BOOKS_TABLE_NAME: !Ref booksTable
+    iamRoleStatements:
+      - Effect: Allow
+        Action:
+          - dynamodb:Query
+        Resource: !GetAtt booksTable.Arn
+  calculateTotal:
+    handler: src/handler.calculateTotal
+    memorySize: 128
+    timeout: 5
+  redeemPoints:
+    handler: src/handler.redeemPoints
+    memorySize: 128
+    timeout: 5
+    environment:
+      USERS_TABLE_NAME: !Ref usersTable
+    iamRoleStatements:
+      - Effect: Allow
+        Action:
+          - dynamodb:Get*
+          - dynamodb:Update*
+        Resource: !GetAtt usersTable.Arn
+  billCustomer:
+    handler: src/handler.billCustomer
+    memorySize: 128
+    timeout: 5
+  sqsWorker:
+    handler: src/handler.sqsWorker
+    memorySize: 128
+    timeout: 5
+    environment:
+      BOOKS_TABLE_NAME: !Ref booksTable
+    iamRoleStatements:
+      - Effect: Allow
+        Action:
+          - dynamodb:Update*
+        Resource: !GetAtt booksTable.Arn
+      - Effect: Allow
+        Action: states:*
+        Resource: ${self:resources.Outputs.OrderCheckoutFlow.Value}
+    events:
+      - sqs:
+          arn: !GetAtt ordersQueue.Arn
+          batchSize: 1
+  restoreQuantity:
+    handler: src/handler.restoreQuantity
+    memorySize: 128
+    timeout: 5
+    environment:
+      BOOKS_TABLE_NAME: !Ref booksTable
+    iamRoleStatements:
+      - Effect: Allow
+        Action:
+          - dynamodb:Update*
+        Resource: !GetAtt booksTable.Arn
+  restoreRedeemPoints:
+    handler: src/handler.restoreRedeemPoints
+    memorySize: 128
+    timeout: 5
+    environment:
+      USERS_TABLE_NAME: !Ref usersTable
+    iamRoleStatements:
+      - Effect: Allow
+        Action:
+          - dynamodb:Update*
+        Resource: !GetAtt usersTable.Arn
+
+stepFunctions:
+  stateMachines:
+    orderCheckoutFlow:
+      name: orderCheckoutFlow
+      definition:
+        StartAt: CheckInventory
+        States:
+          CheckInventory:
+            Type: Task
+            Resource: !GetAtt checkInventory.Arn
+            Catch:
+              - ErrorEquals: [BookNotFound]
+                Next: BookNotFoundError
+              - ErrorEquals: [BookOutOfStock]
+                Next: BookOutOfStockError
+            ResultPath: $.book
+            Next: CalculateTotal
+          CalculateTotal:
+            Type: Task
+            Resource: !GetAtt calculateTotal.Arn
+            ResultPath: "$.total"
+            Next: IsRedeemNeeded
+          IsRedeemNeeded:
+            Type: Choice
+            Choices:
+              - Variable: $.redeem
+                BooleanEquals: true
+                Next: RedeemPoints
+            Default: BillCustomer
+          RedeemPoints:
+            Type: Task
+            Resource: !GetAtt redeemPoints.Arn
+            Catch:
+              - ErrorEquals: [States.ALL]
+                Next: RedeemPointsError
+            ResultPath: $.total
+            Next: BillCustomer
+          BillCustomer:
+            Type: Task
+            Resource: !GetAtt billCustomer.Arn
+            Retry:
+              - ErrorEquals: [States.ALL]
+                MaxAttempts: 2
+            Catch:
+              - ErrorEquals: [States.ALL]
+                ResultPath: $.customerBilling
+                Next: BillingError
+            ResultPath: $.billingStatus
+            Next: PrepareOrder
+          PrepareOrder:
+            Type: Task
+            Resource: arn:aws:states:::sqs:sendMessage.waitForTaskToken
+            Parameters:
+              QueueUrl: !Ref ordersQueue
+              MessageBody:
+                Input.$: "$"
+                Token.$: "$$.Task.Token" # From the context
+            Catch:
+              - ErrorEquals: [NoCourierAvailable]
+                ResultPath: $.courierError
+                Next: RefundCustomer
+            ResultPath: $.courierStatus
+            Next: DispatchOrder
+          DispatchOrder:
+            Type: Task
+            Resource: arn:aws:states:::sns:publish
+            Parameters:
+              TopicArn: !Ref notifyCourierSNSTopic
+              Message.$: "$"
+            Next: OrderDispatched
+          OrderDispatched:
+            Type: Pass
+            Result: "Your order will be dispatched in 24 hours"
+            End: true
+          RefundCustomer:
+            Type: Pass
+            Result: "Customer is refunded"
+            ResultPath: $.refundStatus
+            Next: RestoreQuantity
+          RestoreQuantity:
+            Type: Task
+            Resource: !GetAtt restoreQuantity.Arn
+            ResultPath: $.quantityRestoreStatus
+            Next: RestoreRedeemPoints
+          RestoreRedeemPoints:
+            Type: Task
+            Resource: !GetAtt restoreRedeemPoints.Arn
+            End: true
+          BookOutOfStockError:
+            Type: Pass
+            Result: "Sorry, the books is out of stock"
+            End: true
+          BookNotFoundError:
+            Type: Pass
+            Result: "No such book available"
+            End: true
+          RedeemPointsError:
+            Type: Pass
+            Result: "Error in redeeming points"
+            End: true
+          BillingError:
+            Type: Pass
+            Result: "Billing error"
+            ResultPath: $.billingStatus
+            Next: RestoreRedeemPoints
+
+resources:
+  Resources: ${file(resources.yml)}
+  Outputs:
+    OrderCheckoutFlow:
+      Value:
+        Ref: OrderCheckoutFlow
+
+plugins:
+  - serverless-step-functions
+  - serverless-plugin-typescript
+  - serverless-iam-roles-per-function

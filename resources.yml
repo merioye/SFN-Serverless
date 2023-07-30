@@ -1,0 +1,38 @@
+usersTable:
+  Type: AWS::DynamoDB::Table
+  Properties:
+    TableName: usersTable
+    AttributeDefinitions:
+      - AttributeName: id
+        AttributeType: S
+    KeySchema:
+      - AttributeName: id
+        KeyType: HASH
+    ProvisionedThroughput:
+      ReadCapacityUnits: 1
+      WriteCapacityUnits: 1
+
+booksTable:
+  Type: AWS::DynamoDB::Table
+  Properties:
+    TableName: booksTable
+    AttributeDefinitions:
+      - AttributeName: id
+        AttributeType: S
+    KeySchema:
+      - AttributeName: id
+        KeyType: HASH
+    ProvisionedThroughput:
+      ReadCapacityUnits: 1
+      WriteCapacityUnits: 1
+
+ordersQueue:
+  Type: AWS::SQS::Queue
+  Properties:
+    QueueName: ordersQueue
+
+notifyCourierSNSTopic:
+  Type: AWS::SNS::Topic
+  Properties:
+    TopicName: notifyCourierSNSTopic
+    DisplayName: notifyCourierSNSTopic
